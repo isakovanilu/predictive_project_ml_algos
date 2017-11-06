@@ -1,0 +1,118 @@
+---
+title: "Compare_ML_Algos"
+author: "Nilufar Isakova"
+date: "11/5/2017"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(lattice)
+library(ggplot2)
+library(caret)
+library(kernlab)
+library(doParallel) # parallel processing
+registerDoParallel(10) # Registrer a parallel backend for train
+getDoParWorkers()
+
+
+Data <- read.csv("EEGdata.csv",sep=",",header=TRUE)
+names(Data)
+colnames(Data)[colnames(Data) == 'predefined.label'] <- 'class'
+str(Data)
+Data$class <-ifelse(Data$class == 0,"X0","X1")
+#drops <- Data$predefined.label
+Data$class<-factor(Data$class)
+intrain <- createDataPartition(y = Data$class,p = 0.8,list = FALSE) #split data
+#Make training and test data sets global
+assign("training", Data[intrain,] , envir = .GlobalEnv)
+assign("testing",  Data[-intrain,] , envir = .GlobalEnv)
+training[["class"]] = factor(training[["class"]]) #factor the label(class) column
+testing[["class"]] = factor(testing[["class"]])
+dim(training)
+dim(testing)
+anyNA(Data)
+
+#rpart
+set.seed(31415)
+#grid <- expand.grid(cp = 2^seq(from = -30 , to= 0, by = 2) ) tuneGrid= grid, 
+ctrl.cross <- trainControl(method = "cv", number = 10, repeats = 3)
+dc.Fit <-   train(class ~ ., data= training,
+                  method = "rpart",preProc = c("center","scale"),
+                  tuneLength = 10,parms = list(split = "information"),
+                  trControl = ctrl.cross)
+dc.Fit
+plot(dc.Fit,main="DT Parameters")
+dc.Pred <- predict(dc.Fit,testing) #testing
+cm<- confusionMatrix(dc.Pred,testing$class)
+cm
+# RF 
+set.seed(31415)
+n <- dim(training)[2]
+#gridRF <- expand.grid(mtry = seq(from=0,by=as.integer(n/10),to=n)[-1])
+gridRF <- expand.grid(mtry = seq(from=0,by=1,to=n)[-1]) #may need to change this depend on your data size
+ctrl.crossRF <- trainControl(method = "cv",number = 10,classProbs = TRUE,savePredictions = TRUE,allowParallel=TRUE)
+rf.Fit <- train(class ~ .,data = training,method = "rf",metric = "Accuracy",preProc = c("center", "scale"),
+                ntree = 200, tuneGrid = gridRF,trControl = ctrl.crossRF)
+rf.Fit
+plot(rf.Fit,main="RF Parameters")
+rf.Pred <- predict(rf.Fit,testing) #testing
+cm<- confusionMatrix(rf.Pred,testing$class)
+cm
+# SVM Radial basis kernel
+set.seed(31415)
+control <- trainControl(method="cv", number=10, repeats=3)
+svm.radial.Fit <- train(class~., data=Data, method="svmRadial", trControl=control)
+svm.radial.Fit
+ggplot(svm.radial.Fit) + theme_bw()+ggtitle("SVM Radial Parameters")
+svm.radial.Pred <- predict(svm.radial.Fit,testing) #testing
+print("Prediction and confusion matrix of the testing dataset")
+cm<- confusionMatrix(svm.radial.Pred,testing$class)
+cm
+# SVM polynomial kernel
+set.seed(31415)
+grid <- expand.grid(scale = 1, degree = c(1,2), C = 2^seq(from=-4,by = 1, to =6))
+print("Poly Kernel SVM")
+ctrl.cross <- trainControl(method = "cv", number = 10,classProbs = TRUE,savePredictions=TRUE)
+svm.poly.Fit <- train(class ~ ., data= training,
+                      perProc = c("center", "scale"),
+                      method = 'svmPoly', #rpart for classif. dec tree
+                      metric ='Accuracy',
+                      tuneGrid= grid, 
+                      trControl = ctrl.cross)
+svm.poly.Fit
+plot(svm.poly.Fit,main="SVM Poly Parameters")
+svm.poly.Pred <- predict(svm.poly.Fit,testing) #testing
+print("Prediction and confusion matrix of the testing dataset")
+cm<- confusionMatrix(svm.poly.Pred,testing$class)
+cm
+# KNN
+set.seed(31415)
+grid <-expand.grid(kmax = seq(from=2,to=28,by = 1),
+                   distance = 2,#kernel = c("triangular", "rectangular", "epanechnikov", "optimal"))
+                   kernel = "optimal")
+ctrl.cross <- trainControl(method="cv", number=10, repeats=3) #
+knn.Fit <- train(
+  class ~ .,#data = training,method = "knn", trControl = ctrl, preProcess = c("center","scale"), tuneLength = 20
+  data = training,
+  method = "kknn",
+  metric = "Accuracy",
+  perProc = c("center", "scale"),
+  tuneGrid = grid,
+  trControl = ctrl.cross)
+knn.Fit
+plot(knn.Fit,main="KNN Parameters")
+knn.Pred <- predict(knn.Fit,testing) #testing
+print("Prediction and confusion matrix of the testing dataset")
+cm<- confusionMatrix(knn.Pred,testing$class)
+cm
+results <- resamples(list(DC=dc.Fit,RF=rf.Fit,SVM_P=svm.poly.Fit,SVM_R=svm.radial.Fit,KNN=knn.Fit))
+summary(results)
+# box and whisker plots to compare models
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+bwplot(results, scales=scales,main = "Comparing Classification Models")
+```
+
